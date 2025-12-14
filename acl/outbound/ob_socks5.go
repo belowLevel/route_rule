@@ -1,9 +1,10 @@
-package route_rule
+package outbound
 
 import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/belowLevel/route_rule/acl"
 	"io"
 	"net"
 	"time"
@@ -67,9 +68,10 @@ type socks5Outbound struct {
 	Addr     string
 	Username string
 	Password string
+	Name     string
 }
 
-func NewSOCKS5Outbound(addr, username, password string) PluggableOutbound {
+func NewSOCKS5Outbound(addr, username, password, name string) acl.Outbound {
 	return &socks5Outbound{
 		Dialer: &net.Dialer{
 			Timeout: defaultDialerTimeout,
@@ -77,7 +79,11 @@ func NewSOCKS5Outbound(addr, username, password string) PluggableOutbound {
 		Addr:     addr,
 		Username: username,
 		Password: password,
+		Name:     name,
 	}
+}
+func (o *socks5Outbound) GetName() string {
+	return o.Name
 }
 
 // dialAndNegotiate creates a new TCP connection to the SOCKS5 proxy server
@@ -157,7 +163,7 @@ func (o *socks5Outbound) request(conn net.Conn, req *socks5.Request) (*socks5.Re
 	return resp, nil
 }
 
-func (s *socks5Outbound) TCP(reqAddr *AddrEx) (net.Conn, error) {
+func (s *socks5Outbound) TCP(reqAddr *acl.AddrEx) (net.Conn, error) {
 	conn, err := s.dialAndNegotiate()
 	if err != nil {
 		return nil, err
@@ -171,7 +177,7 @@ func (s *socks5Outbound) TCP(reqAddr *AddrEx) (net.Conn, error) {
 	return conn, nil
 }
 
-func (s *socks5Outbound) UDP(reqAddr *AddrEx) (UDPConn, error) {
+func (s *socks5Outbound) UDP(reqAddr *acl.AddrEx) (acl.UDPConn, error) {
 	conn, err := s.dialAndNegotiate()
 	if err != nil {
 		return nil, err
@@ -210,7 +216,7 @@ func (c *socks5UDPConn) hold() {
 	_ = c.udpConn.Close()
 }
 
-func (c *socks5UDPConn) ReadFrom(b []byte) (int, *AddrEx, error) {
+func (c *socks5UDPConn) ReadFrom(b []byte) (int, *acl.AddrEx, error) {
 	n, err := c.udpConn.Read(b)
 	if err != nil {
 		return 0, nil, err
@@ -224,7 +230,7 @@ func (c *socks5UDPConn) ReadFrom(b []byte) (int, *AddrEx, error) {
 	return n, addr, nil
 }
 
-func (c *socks5UDPConn) WriteTo(b []byte, addr *AddrEx) (int, error) {
+func (c *socks5UDPConn) WriteTo(b []byte, addr *acl.AddrEx) (int, error) {
 	atyp, dstAddr, dstPort := addrExToSOCKS5Addr(addr)
 	d := socks5.NewDatagram(atyp, dstAddr, dstPort, b)
 	_, err := c.udpConn.Write(d.Bytes())
@@ -240,7 +246,7 @@ func (c *socks5UDPConn) Close() error {
 	return nil
 }
 
-func addrExToSOCKS5Addr(addr *AddrEx) (atyp byte, dstAddr, dstPort []byte) {
+func addrExToSOCKS5Addr(addr *acl.AddrEx) (atyp byte, dstAddr, dstPort []byte) {
 	// Host
 	ip := net.ParseIP(addr.Host)
 	if ip != nil {
@@ -261,7 +267,7 @@ func addrExToSOCKS5Addr(addr *AddrEx) (atyp byte, dstAddr, dstPort []byte) {
 	return atyp, dstAddr, dstPort
 }
 
-func socks5AddrToAddrEx(atyp byte, dstAddr, dstPort []byte) *AddrEx {
+func socks5AddrToAddrEx(atyp byte, dstAddr, dstPort []byte) *acl.AddrEx {
 	// Host
 	var host string
 	if atyp == socks5.ATYPIPv4 {
@@ -274,7 +280,7 @@ func socks5AddrToAddrEx(atyp byte, dstAddr, dstPort []byte) *AddrEx {
 	}
 	// Port
 	port := binary.BigEndian.Uint16(dstPort)
-	return &AddrEx{
+	return &acl.AddrEx{
 		Host: host,
 		Port: port,
 	}

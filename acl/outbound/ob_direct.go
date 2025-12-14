@@ -1,7 +1,8 @@
-package route_rule
+package outbound
 
 import (
 	"errors"
+	"github.com/belowLevel/route_rule/acl"
 	"net"
 	"strconv"
 	"time"
@@ -43,6 +44,7 @@ type directOutbound struct {
 	DeviceName string
 	BindIP4    net.IP
 	BindIP6    net.IP
+	Name       string
 }
 
 type DirectOutboundOptions struct {
@@ -94,7 +96,7 @@ func (e resolveError) Unwrap() error {
 	return e.Err
 }
 
-func NewDirectOutboundWithOptions(opts DirectOutboundOptions) (PluggableOutbound, error) {
+func NewDirectOutboundWithOptions(opts DirectOutboundOptions) (acl.Outbound, error) {
 	dialer4 := &net.Dialer{
 		Timeout: defaultDialerTimeout,
 	}
@@ -147,7 +149,7 @@ func NewDirectOutboundWithOptions(opts DirectOutboundOptions) (PluggableOutbound
 
 // NewDirectOutboundSimple creates a new directOutbound with the given mode,
 // without binding to a specific device. Works on all platforms.
-func NewDirectOutboundSimple(mode DirectOutboundMode) PluggableOutbound {
+func NewDirectOutboundSimple(mode DirectOutboundMode, name string) acl.Outbound {
 	d := &net.Dialer{
 		Timeout: defaultDialerTimeout,
 	}
@@ -155,6 +157,7 @@ func NewDirectOutboundSimple(mode DirectOutboundMode) PluggableOutbound {
 		Mode:      mode,
 		DialFunc4: d.Dial,
 		DialFunc6: d.Dial,
+		Name:      name,
 	}
 }
 
@@ -162,7 +165,7 @@ func NewDirectOutboundSimple(mode DirectOutboundMode) PluggableOutbound {
 // and binds to the given IPv4 and IPv6 addresses. Either or both of the addresses
 // can be nil, in which case the directOutbound will not bind to a specific address
 // for that family.
-func NewDirectOutboundBindToIPs(mode DirectOutboundMode, bindIP4, bindIP6 net.IP) (PluggableOutbound, error) {
+func NewDirectOutboundBindToIPs(mode DirectOutboundMode, bindIP4, bindIP6 net.IP) (acl.Outbound, error) {
 	return NewDirectOutboundWithOptions(DirectOutboundOptions{
 		Mode:    mode,
 		BindIP4: bindIP4,
@@ -172,7 +175,7 @@ func NewDirectOutboundBindToIPs(mode DirectOutboundMode, bindIP4, bindIP6 net.IP
 
 // NewDirectOutboundBindToDevice creates a new directOutbound with the given mode,
 // and binds to the given device. Only works on Linux.
-func NewDirectOutboundBindToDevice(mode DirectOutboundMode, deviceName string) (PluggableOutbound, error) {
+func NewDirectOutboundBindToDevice(mode DirectOutboundMode, deviceName string) (acl.Outbound, error) {
 	return NewDirectOutboundWithOptions(DirectOutboundOptions{
 		Mode:       mode,
 		DeviceName: deviceName,
@@ -181,21 +184,25 @@ func NewDirectOutboundBindToDevice(mode DirectOutboundMode, deviceName string) (
 
 // resolve is our built-in DNS resolver for handling the case when
 // AddrEx.ResolveInfo is nil.
-func (d *directOutbound) resolve(reqAddr *AddrEx) {
+func (d *directOutbound) resolve(reqAddr *acl.AddrEx) {
 	ips, err := net.LookupIP(reqAddr.Host)
 	if err != nil {
-		reqAddr.ResolveInfo = &ResolveInfo{Err: err}
+		reqAddr.Err = err
 		return
 	}
-	r := &ResolveInfo{}
-	r.IPv4, r.IPv6 = splitIPv4IPv6(ips)
-	if r.IPv4 == nil && r.IPv6 == nil {
-		r.Err = noAddressError{IPv4: true, IPv6: true}
+	reqAddr.HostInfo.IPv4, reqAddr.HostInfo.IPv4 = splitIPv4IPv6(ips)
+	if reqAddr.HostInfo.IPv4 == nil && reqAddr.HostInfo.IPv6 == nil {
+		reqAddr.Err = noAddressError{IPv4: true, IPv6: true}
 	}
-	reqAddr.ResolveInfo = r
 }
 
-func (d *directOutbound) TCP(reqAddr *AddrEx) (net.Conn, error) {
+func (d *directOutbound) TCP(reqAddr *acl.AddrEx) (conn net.Conn, err error) {
+	defer func() {
+		if err == nil {
+			remoteIp, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+			reqAddr.ConnIp = remoteIp
+		}
+	}()
 	hostPort := net.JoinHostPort(reqAddr.Host, strconv.Itoa(int(reqAddr.Port)))
 	switch d.Mode {
 	case DirectOutboundModeAuto:
@@ -219,6 +226,10 @@ func (d *directOutbound) dialTCP(ip net.IP, port uint16) (net.Conn, error) {
 	} else {
 		return d.DialFunc6("tcp6", net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
 	}
+}
+
+func (d *directOutbound) GetName() string {
+	return d.Name
 }
 
 type dialResult struct {
@@ -262,10 +273,10 @@ type directOutboundUDPConn struct {
 	State udpConnState
 }
 
-func (u *directOutboundUDPConn) ReadFrom(b []byte) (int, *AddrEx, error) {
+func (u *directOutboundUDPConn) ReadFrom(b []byte) (int, *acl.AddrEx, error) {
 	n, addr, err := u.UDPConn.ReadFromUDP(b)
 	if addr != nil {
-		return n, &AddrEx{
+		return n, &acl.AddrEx{
 			Host: addr.IP.String(),
 			Port: uint16(addr.Port),
 		}, err
@@ -274,27 +285,26 @@ func (u *directOutboundUDPConn) ReadFrom(b []byte) (int, *AddrEx, error) {
 	}
 }
 
-func (u *directOutboundUDPConn) WriteTo(b []byte, addr *AddrEx) (int, error) {
-	if addr.ResolveInfo == nil {
+func (u *directOutboundUDPConn) WriteTo(b []byte, addr *acl.AddrEx) (int, error) {
+	if addr.HostInfo.IPv4 == nil {
 		u.directOutbound.resolve(addr)
 	}
-	r := addr.ResolveInfo
-	if r.IPv4 == nil && r.IPv6 == nil {
-		return 0, resolveError{Err: r.Err}
+	if addr.HostInfo.IPv4 == nil && addr.HostInfo.IPv6 == nil {
+		return 0, resolveError{Err: addr.Err}
 	}
 	if u.State == udpConnStateIPv4 {
-		if r.IPv4 != nil {
+		if addr.HostInfo.IPv4 != nil {
 			return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-				IP:   r.IPv4,
+				IP:   addr.HostInfo.IPv4,
 				Port: int(addr.Port),
 			})
 		} else {
 			return 0, noAddressError{IPv4: true}
 		}
 	} else if u.State == udpConnStateIPv6 {
-		if r.IPv6 != nil {
+		if addr.HostInfo.IPv6 != nil {
 			return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-				IP:   r.IPv6,
+				IP:   addr.HostInfo.IPv6,
 				Port: int(addr.Port),
 			})
 		} else {
@@ -306,54 +316,54 @@ func (u *directOutboundUDPConn) WriteTo(b []byte, addr *AddrEx) (int, error) {
 		case DirectOutboundModeAuto:
 			// This is a special case.
 			// We must make a decision here, so we prefer IPv4 for maximum compatibility.
-			if r.IPv4 != nil {
+			if addr.HostInfo.IPv4 != nil {
 				return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-					IP:   r.IPv4,
+					IP:   addr.HostInfo.IPv4,
 					Port: int(addr.Port),
 				})
 			} else {
 				return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-					IP:   r.IPv6,
+					IP:   addr.HostInfo.IPv6,
 					Port: int(addr.Port),
 				})
 			}
 		case DirectOutboundMode64:
-			if r.IPv6 != nil {
+			if addr.HostInfo.IPv6 != nil {
 				return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-					IP:   r.IPv6,
+					IP:   addr.HostInfo.IPv6,
 					Port: int(addr.Port),
 				})
 			} else {
 				return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-					IP:   r.IPv4,
+					IP:   addr.HostInfo.IPv4,
 					Port: int(addr.Port),
 				})
 			}
 		case DirectOutboundMode46:
-			if r.IPv4 != nil {
+			if addr.HostInfo.IPv4 != nil {
 				return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-					IP:   r.IPv4,
+					IP:   addr.HostInfo.IPv4,
 					Port: int(addr.Port),
 				})
 			} else {
 				return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-					IP:   r.IPv6,
+					IP:   addr.HostInfo.IPv6,
 					Port: int(addr.Port),
 				})
 			}
 		case DirectOutboundMode6:
-			if r.IPv6 != nil {
+			if addr.HostInfo.IPv6 != nil {
 				return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-					IP:   r.IPv6,
+					IP:   addr.HostInfo.IPv6,
 					Port: int(addr.Port),
 				})
 			} else {
 				return 0, noAddressError{IPv6: true}
 			}
 		case DirectOutboundMode4:
-			if r.IPv4 != nil {
+			if addr.HostInfo.IPv4 != nil {
 				return u.UDPConn.WriteToUDP(b, &net.UDPAddr{
-					IP:   r.IPv4,
+					IP:   addr.HostInfo.IPv4,
 					Port: int(addr.Port),
 				})
 			} else {
@@ -369,7 +379,7 @@ func (u *directOutboundUDPConn) Close() error {
 	return u.UDPConn.Close()
 }
 
-func (d *directOutbound) UDP(reqAddr *AddrEx) (UDPConn, error) {
+func (d *directOutbound) UDP(reqAddr *acl.AddrEx) (acl.UDPConn, error) {
 	if d.BindIP4 == nil && d.BindIP6 == nil {
 		// No bind address specified, use default dual stack implementation
 		c, err := net.ListenUDP("udp", nil)
@@ -392,12 +402,11 @@ func (d *directOutbound) UDP(reqAddr *AddrEx) (UDPConn, error) {
 		// Bind address specified,
 		// need to check what kind of address is in reqAddr
 		// to determine which address family to bind to
-		if reqAddr.ResolveInfo == nil {
+		if reqAddr.HostInfo.IPv4 == nil {
 			d.resolve(reqAddr)
 		}
-		r := reqAddr.ResolveInfo
-		if r.IPv4 == nil && r.IPv6 == nil {
-			return nil, resolveError{Err: r.Err}
+		if reqAddr.HostInfo.IPv4 == nil && reqAddr.HostInfo.IPv6 == nil {
+			return nil, resolveError{Err: reqAddr.Err}
 		}
 		var bindIP net.IP      // can be nil, in which case we still lock the address family but don't bind to any address
 		var state udpConnState // either IPv4 or IPv6
@@ -405,7 +414,7 @@ func (d *directOutbound) UDP(reqAddr *AddrEx) (UDPConn, error) {
 		case DirectOutboundModeAuto:
 			// This is a special case.
 			// We must make a decision here, so we prefer IPv4 for maximum compatibility.
-			if r.IPv4 != nil {
+			if reqAddr.HostInfo.IPv4 != nil {
 				bindIP = d.BindIP4
 				state = udpConnStateIPv4
 			} else {
@@ -413,7 +422,7 @@ func (d *directOutbound) UDP(reqAddr *AddrEx) (UDPConn, error) {
 				state = udpConnStateIPv6
 			}
 		case DirectOutboundMode64:
-			if r.IPv6 != nil {
+			if reqAddr.HostInfo.IPv6 != nil {
 				bindIP = d.BindIP6
 				state = udpConnStateIPv6
 			} else {
@@ -421,7 +430,7 @@ func (d *directOutbound) UDP(reqAddr *AddrEx) (UDPConn, error) {
 				state = udpConnStateIPv4
 			}
 		case DirectOutboundMode46:
-			if r.IPv4 != nil {
+			if reqAddr.HostInfo.IPv4 != nil {
 				bindIP = d.BindIP4
 				state = udpConnStateIPv4
 			} else {
@@ -429,14 +438,14 @@ func (d *directOutbound) UDP(reqAddr *AddrEx) (UDPConn, error) {
 				state = udpConnStateIPv6
 			}
 		case DirectOutboundMode6:
-			if r.IPv6 != nil {
+			if reqAddr.HostInfo.IPv6 != nil {
 				bindIP = d.BindIP6
 				state = udpConnStateIPv6
 			} else {
 				return nil, noAddressError{IPv6: true}
 			}
 		case DirectOutboundMode4:
-			if r.IPv4 != nil {
+			if reqAddr.HostInfo.IPv4 != nil {
 				bindIP = d.BindIP4
 				state = udpConnStateIPv4
 			} else {

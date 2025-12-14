@@ -1,6 +1,6 @@
 //go:build !linux
 
-package route_rule
+package outbound
 
 import (
 	"errors"

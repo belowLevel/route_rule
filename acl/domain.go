@@ -1,16 +1,16 @@
 package acl
 
-import "route_rule/acl/v2geo"
+import "github.com/belowLevel/route_rule/acl/v2geo"
 
 type DomainSet struct {
 	Set *v2geo.Set
 }
 
-func (d *DomainSet) Match(host *HostInfo) bool {
+func (d *DomainSet) Match(reqAddr *AddrEx) bool {
 	if d.Set == nil {
 		return false
 	}
-	return d.Set.Has(host.Name)
+	return d.Set.Has(reqAddr.Host)
 }
 
 func (d *DomainSet) Size() int {

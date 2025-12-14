@@ -3,11 +3,11 @@ package acl
 import (
 	"bufio"
 	"fmt"
+	"github.com/belowLevel/route_rule/acl/v2geo"
 	"net"
 	"os"
 	"path"
 	"path/filepath"
-	"route_rule/acl/v2geo"
 	"strings"
 	"sync"
 	"unicode"
@@ -57,11 +57,14 @@ func (d *Record) Init() error {
 	return nil
 }
 
-func (d *Record) Match(hostInfo *HostInfo) bool {
+func (d *Record) Match(reqAddr *AddrEx) bool {
+	if reqAddr.Err != nil {
+		return false
+	}
 	if d.set == nil {
 		return false
 	}
-	host := hostInfo.Name
+	host := reqAddr.Host
 	if host == "" {
 		return false
 	}
@@ -72,17 +75,15 @@ func (d *Record) Match(hostInfo *HostInfo) bool {
 	if d.set.Has(host) {
 		return true
 	}
-	if hostInfo.Err != nil {
-		return false
+
+	if reqAddr.HostInfo.IPv4 == nil {
+		localResolve(reqAddr)
 	}
-	if hostInfo.IPv4 == nil {
-		localResolve(hostInfo)
+	if reqAddr.HostInfo.IPv4 != nil {
+		return d.matchISO(reqAddr.HostInfo.IPv4, host)
 	}
-	if hostInfo.IPv4 != nil {
-		return d.matchISO(hostInfo.IPv4, host)
-	}
-	if hostInfo.IPv6 != nil {
-		return d.matchISO(hostInfo.IPv6, host)
+	if reqAddr.HostInfo.IPv6 != nil {
+		return d.matchISO(reqAddr.HostInfo.IPv6, host)
 	}
 	return false
 }

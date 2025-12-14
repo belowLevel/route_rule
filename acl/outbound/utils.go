@@ -1,6 +1,9 @@
-package route_rule
+package outbound
 
-import "net"
+import (
+	"github.com/belowLevel/route_rule/acl"
+	"net"
+)
 
 // splitIPv4IPv6 gets the first IPv4 and IPv6 address from a list of IP addresses.
 // Both of the return values can be nil when no IPv4 or IPv6 address is found.
@@ -26,13 +29,12 @@ func splitIPv4IPv6(ips []net.IP) (ipv4, ipv6 net.IP) {
 // tryParseIP tries to parse the host string in the AddrEx as an IP address.
 // If the host is indeed an IP address, it will fill the ResolveInfo with the
 // parsed IP address and return true. Otherwise, it will return false.
-func tryParseIP(addr *AddrEx) bool {
+func tryParseIP(addr *acl.AddrEx) bool {
 	if ip := net.ParseIP(addr.Host); ip != nil {
-		addr.ResolveInfo = &ResolveInfo{}
 		if ip.To4() != nil {
-			addr.ResolveInfo.IPv4 = ip
+			addr.HostInfo.IPv4 = ip
 		} else {
-			addr.ResolveInfo.IPv6 = ip
+			addr.HostInfo.IPv6 = ip
 		}
 		return true
 	}

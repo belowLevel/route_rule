@@ -2,10 +2,10 @@ package acl
 
 import (
 	"bufio"
+	"github.com/belowLevel/route_rule/acl/v2geo"
 	"os"
 	"path"
 	"path/filepath"
-	"route_rule/acl/v2geo"
 	"strings"
 	"unicode"
 )
@@ -50,11 +50,11 @@ func (d *FileDI) Init() error {
 	return nil
 }
 
-func (d *FileDI) Match(host *HostInfo) bool {
+func (d *FileDI) Match(reqAddr *AddrEx) bool {
 	if d.set == nil {
 		return false
 	}
-	return d.set.Has(host.Name)
+	return d.set.Has(reqAddr.Host)
 }
 
 func (d *FileDI) Size() int {

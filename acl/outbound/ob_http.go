@@ -1,4 +1,4 @@
-package route_rule
+package outbound
 
 import (
 	"bufio"
@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/belowLevel/route_rule/acl"
 	"io"
 	"net"
 	"net/http"
@@ -45,9 +46,10 @@ type httpOutbound struct {
 	Insecure   bool
 	ServerName string
 	BasicAuth  string // This is after Base64 encoding
+	Name       string
 }
 
-func NewHTTPOutbound(proxyURL string, insecure bool) (PluggableOutbound, error) {
+func NewHTTPOutbound(proxyURL string, insecure bool, name string) (acl.Outbound, error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		return nil, err
@@ -76,9 +78,12 @@ func NewHTTPOutbound(proxyURL string, insecure bool) (PluggableOutbound, error) 
 		Insecure:   insecure,
 		ServerName: u.Hostname(),
 		BasicAuth:  basicAuth,
+		Name:       name,
 	}, nil
 }
-
+func (o *httpOutbound) GetName() string {
+	return o.Name
+}
 func (o *httpOutbound) dial() (net.Conn, error) {
 	conn, err := o.Dialer.Dial("tcp", o.Addr)
 	if err != nil {
@@ -94,7 +99,7 @@ func (o *httpOutbound) dial() (net.Conn, error) {
 	return conn, nil
 }
 
-func (o *httpOutbound) addrExToRequest(reqAddr *AddrEx) (*http.Request, error) {
+func (o *httpOutbound) addrExToRequest(reqAddr *acl.AddrEx) (*http.Request, error) {
 	req := &http.Request{
 		Method: http.MethodConnect,
 		URL: &url.URL{
@@ -110,7 +115,7 @@ func (o *httpOutbound) addrExToRequest(reqAddr *AddrEx) (*http.Request, error) {
 	return req, nil
 }
 
-func (o *httpOutbound) TCP(reqAddr *AddrEx) (net.Conn, error) {
+func (o *httpOutbound) TCP(reqAddr *acl.AddrEx) (net.Conn, error) {
 	req, err := o.addrExToRequest(reqAddr)
 	if err != nil {
 		return nil, err
@@ -166,7 +171,7 @@ func (o *httpOutbound) TCP(reqAddr *AddrEx) (net.Conn, error) {
 	}
 }
 
-func (o *httpOutbound) UDP(reqAddr *AddrEx) (UDPConn, error) {
+func (o *httpOutbound) UDP(reqAddr *acl.AddrEx) (acl.UDPConn, error) {
 	return nil, errHTTPUDPNotSupported
 }
 

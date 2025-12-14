@@ -1,18 +1,14 @@
 package route_rule
 
 import (
-	"errors"
+	"github.com/belowLevel/route_rule/acl"
 	"net"
 	"os"
-	"route_rule/acl"
-	"strings"
 )
 
 const (
 	aclCacheSize = 1024
 )
-
-var errRejected = errors.New("rejected")
 
 // aclEngine is a PluggableOutbound that dispatches connections to different
 // outbounds based on ACL rules.
@@ -23,29 +19,30 @@ var errRejected = errors.New("rejected")
 // If the user-defined outbounds contain any of the above names, they will
 // override the built-in outbounds.
 type aclEngine struct {
-	RuleSet acl.CompiledRuleSet[PluggableOutbound]
-	Default PluggableOutbound
+	RuleSet acl.CompiledRuleSet[acl.Outbound]
+	Default acl.Outbound
+	Name    string
 }
 
 type OutboundEntry struct {
 	Name     string
-	Outbound PluggableOutbound
+	Outbound acl.Outbound
 }
 
-func NewACLEngineFromString(rules string, outbounds []OutboundEntry, geoLoader acl.GeoLoader) (PluggableOutbound, error) {
+func NewACLEngineFromString(rules string, outbounds []OutboundEntry, geoLoader acl.GeoLoader) (acl.Outbound, error) {
 	trs, err := acl.ParseTextRules(rules)
 	if err != nil {
 		return nil, err
 	}
 	obMap := outboundsToMap(outbounds)
-	rs, err := acl.Compile[PluggableOutbound](trs, obMap, aclCacheSize, geoLoader)
+	rs, err := acl.Compile[acl.Outbound](trs, obMap, aclCacheSize, geoLoader)
 	if err != nil {
 		return nil, err
 	}
-	return &aclEngine{rs, obMap["default"]}, nil
+	return &aclEngine{rs, obMap["default"], "aclEngine"}, nil
 }
 
-func NewACLEngineFromFile(filename string, outbounds []OutboundEntry, geoLoader acl.GeoLoader) (PluggableOutbound, error) {
+func NewACLEngineFromFile(filename string, outbounds []OutboundEntry, geoLoader acl.GeoLoader) (acl.Outbound, error) {
 	bs, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, err
@@ -53,81 +50,44 @@ func NewACLEngineFromFile(filename string, outbounds []OutboundEntry, geoLoader 
 	return NewACLEngineFromString(string(bs), outbounds, geoLoader)
 }
 
-func outboundsToMap(outbounds []OutboundEntry) map[string]PluggableOutbound {
-	obMap := make(map[string]PluggableOutbound)
+func outboundsToMap(outbounds []OutboundEntry) map[string]acl.Outbound {
+	obMap := make(map[string]acl.Outbound)
 	for _, ob := range outbounds {
-		obMap[strings.ToLower(ob.Name)] = ob.Outbound
-	}
-	// Add built-in outbounds if not overridden
-	if _, ok := obMap["direct"]; !ok {
-		obMap["direct"] = NewDirectOutboundSimple(DirectOutboundModeAuto)
-	}
-	if _, ok := obMap["reject"]; !ok {
-		obMap["reject"] = &aclRejectOutbound{}
-	}
-	if _, ok := obMap["default"]; !ok {
-		if len(outbounds) > 0 {
-			obMap["default"] = outbounds[0].Outbound
-		} else {
-			obMap["default"] = obMap["direct"]
-		}
+		obMap[ob.Name] = ob.Outbound
 	}
 	return obMap
 }
 
-func (a *aclEngine) handle(reqAddr *AddrEx, proto acl.Protocol) PluggableOutbound {
-	hostInfo := acl.HostInfo{Name: reqAddr.Host}
-	if reqAddr.ResolveInfo != nil {
-		hostInfo.IPv4 = reqAddr.ResolveInfo.IPv4
-		hostInfo.IPv6 = reqAddr.ResolveInfo.IPv6
+func (a *aclEngine) handle(reqAddr *acl.AddrEx) acl.Outbound {
+	if reqAddr.HostInfo == nil {
+		reqAddr.HostInfo = &acl.HostInfo{}
 	}
-	ob, hijackIP, txt := a.RuleSet.Match(&hostInfo, proto, reqAddr.Port)
-	if reqAddr.ResolveInfo == nil {
-		if hostInfo.IPv4 != nil || hostInfo.IPv6 != nil || hostInfo.Err != nil {
-			reqAddr.ResolveInfo = &ResolveInfo{
-				IPv4: hostInfo.IPv4,
-				IPv6: hostInfo.IPv6,
-				Err:  hostInfo.Err,
-			}
-		}
-	}
+	ob := a.RuleSet.Match(reqAddr)
 	if ob == nil {
 		// No match, use default outbound
 		return a.Default
 	}
-	reqAddr.Txt = txt
-	if hijackIP != nil {
-		// We must rewrite both Host & ResolveInfo,
-		// as some outbounds only care about Host.
-		reqAddr.Host = hijackIP.String()
-		if ip4 := hijackIP.To4(); ip4 != nil {
-			reqAddr.ResolveInfo = &ResolveInfo{IPv4: ip4}
-		} else {
-			reqAddr.ResolveInfo = &ResolveInfo{IPv6: hijackIP}
-		}
-	}
 	return ob
 }
 
-func (a *aclEngine) TCP(reqAddr *AddrEx) (net.Conn, error) {
-	ob := a.handle(reqAddr, acl.ProtocolTCP)
-	if reqAddr.ResolveInfo != nil && reqAddr.ResolveInfo.Err != nil {
-		return nil, reqAddr.ResolveInfo.Err
+func (a *aclEngine) TCP(reqAddr *acl.AddrEx) (net.Conn, error) {
+	reqAddr.Proto = acl.ProtocolTCP
+	ob := a.handle(reqAddr)
+	if reqAddr.Err != nil {
+		return nil, reqAddr.Err
 	}
+	reqAddr.ObName = ob.GetName()
 	return ob.TCP(reqAddr)
 }
 
-func (a *aclEngine) UDP(reqAddr *AddrEx) (UDPConn, error) {
-	ob := a.handle(reqAddr, acl.ProtocolUDP)
+func (a *aclEngine) UDP(reqAddr *acl.AddrEx) (acl.UDPConn, error) {
+	reqAddr.Proto = acl.ProtocolUDP
+	ob := a.handle(reqAddr)
+	if reqAddr.Err != nil {
+		return nil, reqAddr.Err
+	}
 	return ob.UDP(reqAddr)
 }
-
-type aclRejectOutbound struct{}
-
-func (a *aclRejectOutbound) TCP(reqAddr *AddrEx) (net.Conn, error) {
-	return nil, errRejected
-}
-
-func (a *aclRejectOutbound) UDP(reqAddr *AddrEx) (UDPConn, error) {
-	return nil, errRejected
+func (a *aclEngine) GetName() string {
+	return a.Name
 }

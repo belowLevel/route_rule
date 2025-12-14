@@ -2,11 +2,11 @@ package acl
 
 import (
 	"fmt"
-	"github.com/oschwald/maxminddb-golang"
+	"github.com/belowLevel/route_rule/acl/v2geo"
+	"github.com/oschwald/maxminddb-golang/v2"
 	"io"
 	"net/http"
 	"os"
-	"route_rule/acl/v2geo"
 	"time"
 )
 

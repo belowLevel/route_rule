@@ -1,8 +1,9 @@
 package acl
 
 import (
-	"github.com/oschwald/maxminddb-golang"
+	"github.com/oschwald/maxminddb-golang/v2"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 )
@@ -35,7 +36,11 @@ func (r *IPReader) LookupCode(ipAddress net.IP) []string {
 		return []string{}
 	}
 	var country geoip2Country
-	_ = r.Lookup(ipAddress, &country)
+	netAddr, ok := netip.AddrFromSlice(ipAddress)
+	if !ok {
+		return []string{}
+	}
+	_ = r.Lookup(netAddr).Decode(&country)
 	if country.Country.IsoCode == "" {
 		return []string{}
 	}

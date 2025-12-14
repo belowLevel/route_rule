@@ -1,4 +1,4 @@
-package route_rule
+package outbound
 
 import (
 	"errors"

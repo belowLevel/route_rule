@@ -2,8 +2,8 @@ package acl
 
 import (
 	"fmt"
+	"github.com/belowLevel/route_rule/acl/v2geo"
 	"net"
-	"route_rule/acl/v2geo"
 	"strconv"
 	"strings"
 
@@ -31,23 +31,13 @@ func (p Protocol) String() string {
 	}
 }
 
-type Outbound interface {
-	any
-}
-
 type HostInfo struct {
-	Name string
 	IPv4 net.IP
 	IPv6 net.IP
-	Err  error
-}
-
-func (h HostInfo) String() string {
-	return fmt.Sprintf("%s|%s|%s", h.Name, h.IPv4, h.IPv6)
 }
 
 type CompiledRuleSet[O Outbound] interface {
-	Match(host *HostInfo, proto Protocol, port uint16) (O, net.IP, string)
+	Match(reqAddr *AddrEx) O
 }
 
 type compiledRule[O Outbound] struct {
@@ -60,21 +50,20 @@ type compiledRule[O Outbound] struct {
 	Txt           string
 }
 
-func (r *compiledRule[O]) Match(host *HostInfo, proto Protocol, port uint16) bool {
-	if r.Protocol != ProtocolBoth && r.Protocol != proto {
+func (r *compiledRule[O]) Match(reqAddr *AddrEx) bool {
+	if r.Protocol != ProtocolBoth && r.Protocol != reqAddr.Proto {
 		return false
 	}
-	if r.StartPort != 0 && (port < r.StartPort || port > r.EndPort) {
+	if r.StartPort != 0 && (reqAddr.Port < r.StartPort || reqAddr.Port > r.EndPort) {
 		return false
 	}
-	return r.HostMatcher.Match(host)
+	return r.HostMatcher.Match(reqAddr)
 }
 
 type matchResult[O Outbound] struct {
-	Outbound      O
-	HijackAddress net.IP
-	Txt           string
-	Err           error
+	Outbound O
+	Txt      string
+	Err      error
 }
 
 type compiledRuleSetImpl[O Outbound] struct {
@@ -88,30 +77,30 @@ type matchResultCacheKey struct {
 	Port  uint16
 }
 
-func (s *compiledRuleSetImpl[O]) Match(host *HostInfo, proto Protocol, port uint16) (O, net.IP, string) {
-	host.Name = strings.ToLower(host.Name) // Normalize host name to lower case
+func (s *compiledRuleSetImpl[O]) Match(reqAddr *AddrEx) O {
+	reqAddr.Host = strings.ToLower(reqAddr.Host) // Normalize host name to lower case
 	key := matchResultCacheKey{
-		Host:  host.String(),
-		Proto: proto,
-		Port:  port,
+		Host:  reqAddr.Host,
+		Proto: reqAddr.Proto,
+		Port:  reqAddr.Port,
 	}
 	if result, ok := s.Cache.Get(key); ok {
-		if result.Err != nil {
-			host.Err = result.Err
-		}
-		return result.Outbound, result.HijackAddress, result.Txt
+		reqAddr.Err = result.Err
+		reqAddr.Txt = result.Txt
+		return result.Outbound
 	}
 	for _, rule := range s.Rules {
-		if rule.Match(host, proto, port) {
-			result := matchResult[O]{rule.Outbound, rule.HijackAddress, rule.Txt, host.Err}
+		if rule.Match(reqAddr) {
+			result := matchResult[O]{rule.Outbound, rule.Txt, reqAddr.Err}
 			s.Cache.Add(key, result)
-			return result.Outbound, result.HijackAddress, result.Txt
+			reqAddr.Txt = result.Txt
+			return result.Outbound
 		}
 	}
 	// No match should also be cached
 	var zero O
-	s.Cache.Add(key, matchResult[O]{zero, nil, "", nil})
-	return zero, nil, ""
+	s.Cache.Add(key, matchResult[O]{zero, "", nil})
+	return zero
 }
 
 type CompilationError struct {
@@ -138,7 +127,7 @@ func Compile[O Outbound](rules []TextRule, outbounds map[string]O,
 ) (CompiledRuleSet[O], error) {
 	compiledRules := make([]compiledRule[O], len(rules))
 	for i, rule := range rules {
-		outbound, ok := outbounds[strings.ToLower(rule.Outbound)]
+		outbound, ok := outbounds[(rule.Outbound)]
 		if !ok {
 			return nil, &CompilationError{rule.LineNum, fmt.Sprintf("outbound %s not found", rule.Outbound)}
 		}

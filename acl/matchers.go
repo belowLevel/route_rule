@@ -14,23 +14,24 @@ const (
 )
 
 type hostMatcher interface {
-	Match(*HostInfo) bool
+	Match(*AddrEx) bool
 }
 
 type ipMatcher struct {
 	IP net.IP
 }
 
-func (m *ipMatcher) Match(host *HostInfo) bool {
-	return m.IP.Equal(host.IPv4) || m.IP.Equal(host.IPv6)
+func (m *ipMatcher) Match(reqAddr *AddrEx) bool {
+
+	return m.IP.Equal(reqAddr.HostInfo.IPv4) || m.IP.Equal(reqAddr.HostInfo.IPv6)
 }
 
 type cidrMatcher struct {
 	IPNet *net.IPNet
 }
 
-func (m *cidrMatcher) Match(host *HostInfo) bool {
-	return m.IPNet.Contains(host.IPv4) || m.IPNet.Contains(host.IPv6)
+func (m *cidrMatcher) Match(reqAddr *AddrEx) bool {
+	return m.IPNet.Contains(reqAddr.HostInfo.IPv4) || m.IPNet.Contains(reqAddr.HostInfo.IPv6)
 }
 
 type domainMatcher struct {
@@ -38,10 +39,10 @@ type domainMatcher struct {
 	Mode    uint8
 }
 
-func (m *domainMatcher) Match(host *HostInfo) bool {
-	name, err := idna.ToUnicode(host.Name)
+func (m *domainMatcher) Match(reqAddr *AddrEx) bool {
+	name, err := idna.ToUnicode(reqAddr.Host)
 	if err != nil {
-		name = host.Name
+		name = reqAddr.Host
 	}
 	switch m.Mode {
 	case domainMatchExact:
@@ -74,6 +75,6 @@ func deepMatchRune(str, pattern []rune) bool {
 
 type allMatcher struct{}
 
-func (m *allMatcher) Match(host *HostInfo) bool {
+func (m *allMatcher) Match(reqAddr *AddrEx) bool {
 	return true
 }

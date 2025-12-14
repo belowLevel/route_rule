@@ -2,9 +2,9 @@ package acl
 
 import (
 	"errors"
+	"github.com/belowLevel/route_rule/acl/v2geo"
 	"net"
 	"regexp"
-	"route_rule/acl/v2geo"
 	"strings"
 )
 
@@ -30,18 +30,18 @@ func (m *geoipMatcher) matchIP(ip net.IP) bool {
 	return false
 }
 
-func (m *geoipMatcher) Match(host *HostInfo) bool {
-	if host.Err != nil {
+func (m *geoipMatcher) Match(reqAddr *AddrEx) bool {
+	if reqAddr.Err != nil {
 		return false
 	}
-	if host.IPv4 == nil {
-		localResolve(host)
+	if reqAddr.HostInfo.IPv4 == nil {
+		localResolve(reqAddr)
 	}
-	if host.IPv4 != nil {
-		return m.matchIP(host.IPv4)
+	if reqAddr.HostInfo.IPv4 != nil {
+		return m.matchIP(reqAddr.HostInfo.IPv4)
 	}
-	if host.IPv6 != nil {
-		return m.matchIP(host.IPv6)
+	if reqAddr.HostInfo.IPv6 != nil {
+		return m.matchIP(reqAddr.HostInfo.IPv6)
 	}
 	return false
 }
@@ -78,7 +78,7 @@ type geositeMatcher struct {
 	Attrs []string
 }
 
-func (m *geositeMatcher) matchDomain(domain geositeDomain, host *HostInfo) bool {
+func (m *geositeMatcher) matchDomain(domain geositeDomain, reqAddr *AddrEx) bool {
 	// Match attributes first
 	if len(m.Attrs) > 0 {
 		if len(domain.Attrs) == 0 {
@@ -93,27 +93,27 @@ func (m *geositeMatcher) matchDomain(domain geositeDomain, host *HostInfo) bool 
 
 	switch domain.Type {
 	case geositeDomainPlain:
-		return strings.Contains(host.Name, domain.Value)
+		return strings.Contains(reqAddr.Host, domain.Value)
 	case geositeDomainRegex:
 		if domain.Regex != nil {
-			return domain.Regex.MatchString(host.Name)
+			return domain.Regex.MatchString(reqAddr.Host)
 		}
 	case geositeDomainFull:
-		return host.Name == domain.Value
+		return reqAddr.Host == domain.Value
 	case geositeDomainRoot:
-		if host.Name == domain.Value {
+		if reqAddr.Host == domain.Value {
 			return true
 		}
-		return strings.HasSuffix(host.Name, "."+domain.Value)
+		return strings.HasSuffix(reqAddr.Host, "."+domain.Value)
 	default:
 		return false
 	}
 	return false
 }
 
-func (m *geositeMatcher) Match(host *HostInfo) bool {
+func (m *geositeMatcher) Match(reqAddr *AddrEx) bool {
 	for _, domain := range m.Domains {
-		if m.matchDomain(domain, host) {
+		if m.matchDomain(domain, reqAddr) {
 			return true
 		}
 	}
@@ -172,13 +172,13 @@ func domainAttributeToMap(attrs []*v2geo.Domain_Attribute) map[string]bool {
 	return m
 }
 
-func localResolve(host *HostInfo) {
-	ips, err := net.LookupIP(host.Name)
+func localResolve(reqAddr *AddrEx) {
+	ips, err := net.LookupIP(reqAddr.Host)
 	if err != nil {
-		host.Err = err
+		reqAddr.Err = err
 		return
 	}
-	host.IPv4, host.IPv6 = splitIPv4IPv6(ips)
+	reqAddr.HostInfo.IPv4, reqAddr.HostInfo.IPv6 = splitIPv4IPv6(ips)
 }
 
 func splitIPv4IPv6(ips []net.IP) (ipv4, ipv6 net.IP) {
