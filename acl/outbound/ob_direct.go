@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"context"
 	"errors"
 	"github.com/belowLevel/route_rule/acl"
 	"net"
@@ -36,8 +37,8 @@ type directOutbound struct {
 	Mode DirectOutboundMode
 
 	// Dialer4 and Dialer6 are used for IPv4 and IPv6 TCP connections respectively.
-	DialFunc4 func(network, address string) (net.Conn, error)
-	DialFunc6 func(network, address string) (net.Conn, error)
+	DialFunc4 func(ctx context.Context, network, address string) (net.Conn, error)
+	DialFunc6 func(ctx context.Context, network, address string) (net.Conn, error)
 
 	// DeviceName & BindIPs are for UDP connections. They don't use dialers, so we
 	// need to bind them when creating the connection.
@@ -129,14 +130,8 @@ func NewDirectOutboundWithOptions(opts DirectOutboundOptions) (acl.Outbound, err
 			return nil, err
 		}
 	}
-
-	dialFunc4 := dialer4.Dial
-	dialFunc6 := dialer6.Dial
-	if opts.FastOpen {
-		dialFunc4 = newFastOpenDialer(dialer4).Dial
-		dialFunc6 = newFastOpenDialer(dialer6).Dial
-	}
-
+	dialFunc4 := dialer4.DialContext
+	dialFunc6 := dialer6.DialContext
 	return &directOutbound{
 		Mode:       opts.Mode,
 		DialFunc4:  dialFunc4,
@@ -155,8 +150,8 @@ func NewDirectOutboundSimple(mode DirectOutboundMode, name string) acl.Outbound 
 	}
 	return &directOutbound{
 		Mode:      mode,
-		DialFunc4: d.Dial,
-		DialFunc6: d.Dial,
+		DialFunc4: d.DialContext,
+		DialFunc6: d.DialContext,
 		Name:      name,
 	}
 }
@@ -196,7 +191,7 @@ func (d *directOutbound) resolve(reqAddr *acl.AddrEx) {
 	}
 }
 
-func (d *directOutbound) TCP(reqAddr *acl.AddrEx) (conn net.Conn, err error) {
+func (d *directOutbound) TCP(ctx context.Context, reqAddr *acl.AddrEx) (conn net.Conn, err error) {
 	defer func() {
 		if err == nil {
 			remoteIp, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
@@ -210,21 +205,21 @@ func (d *directOutbound) TCP(reqAddr *acl.AddrEx) (conn net.Conn, err error) {
 	case DirectOutboundMode64:
 		fallthrough
 	case DirectOutboundMode46:
-		return d.DialFunc4("tcp", hostPort)
+		return d.DialFunc4(ctx, "tcp", hostPort)
 	case DirectOutboundMode6:
-		return d.DialFunc4("tcp6", hostPort)
+		return d.DialFunc4(ctx, "tcp6", hostPort)
 	case DirectOutboundMode4:
-		return d.DialFunc4("tcp4", hostPort)
+		return d.DialFunc4(ctx, "tcp4", hostPort)
 	default:
 		return nil, invalidOutboundModeError{}
 	}
 }
 
-func (d *directOutbound) dialTCP(ip net.IP, port uint16) (net.Conn, error) {
+func (d *directOutbound) dialTCP(ctx context.Context, ip net.IP, port uint16) (net.Conn, error) {
 	if ip.To4() != nil {
-		return d.DialFunc4("tcp4", net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
+		return d.DialFunc4(ctx, "tcp4", net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
 	} else {
-		return d.DialFunc6("tcp6", net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
+		return d.DialFunc6(ctx, "tcp6", net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
 	}
 }
 
@@ -240,14 +235,14 @@ type dialResult struct {
 // dualStackDialTCP dials the target using both IPv4 and IPv6 addresses simultaneously.
 // It returns the first successful connection and drops the other one.
 // If both connections fail, it returns the last error.
-func (d *directOutbound) dualStackDialTCP(ipv4, ipv6 net.IP, port uint16) (net.Conn, error) {
+func (d *directOutbound) dualStackDialTCP(ctx context.Context, ipv4, ipv6 net.IP, port uint16) (net.Conn, error) {
 	ch := make(chan dialResult, 2)
 	go func() {
-		conn, err := d.dialTCP(ipv4, port)
+		conn, err := d.dialTCP(ctx, ipv4, port)
 		ch <- dialResult{Conn: conn, Err: err}
 	}()
 	go func() {
-		conn, err := d.dialTCP(ipv6, port)
+		conn, err := d.dialTCP(ctx, ipv6, port)
 		ch <- dialResult{Conn: conn, Err: err}
 	}()
 	// Get the first result, check if it's successful

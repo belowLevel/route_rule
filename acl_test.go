@@ -1,6 +1,7 @@
 package route_rule
 
 import (
+	"context"
 	"github.com/belowLevel/route_rule/acl"
 	"github.com/belowLevel/route_rule/acl/outbound"
 	"log"
@@ -43,7 +44,7 @@ func TestACL(t *testing.T) {
 		Host: "xxee.com",
 		Port: 80,
 	}
-	conn, err := aclO.TCP(&reqAddr)
+	conn, err := aclO.TCP(context.Background(), &reqAddr)
 
 	if err != nil {
 		t.Errorf("%v", err)

@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -89,8 +90,8 @@ func (o *socks5Outbound) GetName() string {
 // dialAndNegotiate creates a new TCP connection to the SOCKS5 proxy server
 // and performs the negotiation. Returns an established connection ready to
 // handle requests, or an error if the process fails.
-func (o *socks5Outbound) dialAndNegotiate() (net.Conn, error) {
-	conn, err := o.Dialer.Dial("tcp", o.Addr)
+func (o *socks5Outbound) dialAndNegotiate(ctx context.Context) (net.Conn, error) {
+	conn, err := o.Dialer.DialContext(ctx, "tcp", o.Addr)
 	if err != nil {
 		return nil, err
 	}
@@ -163,8 +164,8 @@ func (o *socks5Outbound) request(conn net.Conn, req *socks5.Request) (*socks5.Re
 	return resp, nil
 }
 
-func (s *socks5Outbound) TCP(reqAddr *acl.AddrEx) (net.Conn, error) {
-	conn, err := s.dialAndNegotiate()
+func (s *socks5Outbound) TCP(ctx context.Context, reqAddr *acl.AddrEx) (net.Conn, error) {
+	conn, err := s.dialAndNegotiate(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +179,7 @@ func (s *socks5Outbound) TCP(reqAddr *acl.AddrEx) (net.Conn, error) {
 }
 
 func (s *socks5Outbound) UDP(reqAddr *acl.AddrEx) (acl.UDPConn, error) {
-	conn, err := s.dialAndNegotiate()
+	conn, err := s.dialAndNegotiate(context.Background())
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package outbound
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -84,8 +85,8 @@ func NewHTTPOutbound(proxyURL string, insecure bool, name string) (acl.Outbound,
 func (o *httpOutbound) GetName() string {
 	return o.Name
 }
-func (o *httpOutbound) dial() (net.Conn, error) {
-	conn, err := o.Dialer.Dial("tcp", o.Addr)
+func (o *httpOutbound) dial(ctx context.Context) (net.Conn, error) {
+	conn, err := o.Dialer.DialContext(ctx, "tcp", o.Addr)
 	if err != nil {
 		return nil, err
 	}
@@ -115,12 +116,12 @@ func (o *httpOutbound) addrExToRequest(reqAddr *acl.AddrEx) (*http.Request, erro
 	return req, nil
 }
 
-func (o *httpOutbound) TCP(reqAddr *acl.AddrEx) (net.Conn, error) {
+func (o *httpOutbound) TCP(ctx context.Context, reqAddr *acl.AddrEx) (net.Conn, error) {
 	req, err := o.addrExToRequest(reqAddr)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := o.dial()
+	conn, err := o.dial(ctx)
 	if err != nil {
 		return nil, err
 	}

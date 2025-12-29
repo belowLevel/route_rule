@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"context"
 	"errors"
 	"github.com/belowLevel/route_rule/acl"
 	"net"
@@ -22,7 +23,7 @@ func (a *aclRejectOutbound) GetName() string {
 	return a.Name
 }
 
-func (a *aclRejectOutbound) TCP(reqAddr *acl.AddrEx) (net.Conn, error) {
+func (a *aclRejectOutbound) TCP(ctx context.Context, reqAddr *acl.AddrEx) (net.Conn, error) {
 	return nil, errRejected
 }
 

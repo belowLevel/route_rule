@@ -1,6 +1,7 @@
 package route_rule
 
 import (
+	"context"
 	"github.com/belowLevel/route_rule/acl"
 	"net"
 	"os"
@@ -70,14 +71,14 @@ func (a *aclEngine) handle(reqAddr *acl.AddrEx) acl.Outbound {
 	return ob
 }
 
-func (a *aclEngine) TCP(reqAddr *acl.AddrEx) (net.Conn, error) {
+func (a *aclEngine) TCP(ctx context.Context, reqAddr *acl.AddrEx) (net.Conn, error) {
 	reqAddr.Proto = acl.ProtocolTCP
 	ob := a.handle(reqAddr)
 	if reqAddr.Err != nil {
 		return nil, reqAddr.Err
 	}
 	reqAddr.ObName = ob.GetName()
-	return ob.TCP(reqAddr)
+	return ob.TCP(ctx, reqAddr)
 }
 
 func (a *aclEngine) UDP(reqAddr *acl.AddrEx) (acl.UDPConn, error) {

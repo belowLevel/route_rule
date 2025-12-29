@@ -1,6 +1,7 @@
 package acl
 
 import (
+	"context"
 	"net"
 	"strconv"
 )
@@ -51,7 +52,7 @@ type ResolveInfo struct {
 // to make a "connected" UDP connection that does not accept packets from other addresses.
 // In fact, the default implementation simply uses net.ListenUDP for a "full-cone" behavior.
 type Outbound interface {
-	TCP(reqAddr *AddrEx) (net.Conn, error)
+	TCP(ctx context.Context, reqAddr *AddrEx) (net.Conn, error)
 	UDP(reqAddr *AddrEx) (UDPConn, error)
 	GetName() string
 }
