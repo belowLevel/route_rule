@@ -7,12 +7,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
 const (
-	geoipFilename   = "geoip.dat"
-	geoipURL        = "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat"
 	geositeFilename = "geosite.dat"
 	geositeURL      = "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
 	geoDlTmpPattern = ".hysteria-geoloader.dlpart.*"
@@ -29,21 +28,24 @@ var _ GeoLoader = (*GeoLoaderT)(nil)
 // loading functionality required by the ACL engine.
 // Empty filenames = automatic download from built-in URLs.
 type GeoLoaderT struct {
-	GeoIPFilename   string
-	GeoSiteFilename string
-	UpdateInterval  time.Duration
+	GeoIPFilename   string        `json:"-" yaml:"-"`
+	GeoSiteFilename string        `json:"-" yaml:"-"`
+	UpdateInterval  time.Duration `json:"-" yaml:"-"`
+	GeositeURL      string        `json:"geosite-url" yaml:"geosite-url"`
 
-	DownloadFunc    func(filename, url string)
-	DownloadErrFunc func(err error)
+	DownloadFunc    func(filename, url string) `json:"-" yaml:"-"`
+	DownloadErrFunc func(err error)            `json:"-" yaml:"-"`
 
-	geoipMap   map[string]*v2geo.GeoIP
-	geositeMap map[string]*v2geo.GeoSite
+	geoipMap   map[string]*v2geo.GeoIP   `json:"-" yaml:"-"`
+	geositeMap map[string]*v2geo.GeoSite `json:"-" yaml:"-"`
 
-	geositeSSKVMap map[string]*v2geo.Set
+	geositeSSKVMap map[string]*v2geo.Set `json:"-" yaml:"-"`
+	MmdbURL        string                `json:"mmdb-url" yaml:"mmdb-url"`
 
-	MMDBFilename string
-	ipreader     *IPReader
-	AutoDL       bool
+	MMDBFilename string     `json:"-" yaml:"-"`
+	ipreader     *IPReader  `json:"-" yaml:"-"`
+	AutoDL       bool       `json:"auto-download" yaml:"auto-download"`
+	lock         sync.Mutex `json:"-" yaml:"-"`
 }
 
 func (l *GeoLoaderT) shouldDownload(filename string) bool {
@@ -103,85 +105,19 @@ func (l *GeoLoaderT) downloadAndCheck(filename, url string, checkFunc func(filen
 	return nil
 }
 
-func (l *GeoLoaderT) LoadGeoIP() (map[string]*v2geo.GeoIP, error) {
-	if l.geoipMap != nil {
-		return l.geoipMap, nil
-	}
-	filename := l.GeoIPFilename
-	if filename == "" {
-		filename = geoipFilename
-	}
-	if l.AutoDL {
-		if !l.shouldDownload(filename) {
-			m, err := v2geo.LoadGeoIP(filename)
-			if err == nil {
-				l.geoipMap = m
-				return m, nil
-			}
-			// file is broken, download it again
-		}
-		err := l.downloadAndCheck(filename, geoipURL, func(filename string) error {
-			_, err := v2geo.LoadGeoIP(filename)
-			return err
-		})
-		if err != nil {
-			// as long as the previous download exists, fallback to it
-			if _, serr := os.Stat(filename); os.IsNotExist(serr) {
-				return nil, err
-			}
-		}
-	}
-	m, err := v2geo.LoadGeoIP(filename)
-	if err != nil {
-		return nil, err
-	}
-	l.geoipMap = m
-	return m, nil
-}
-
-func (l *GeoLoaderT) LoadGeoSite() (map[string]*v2geo.GeoSite, error) {
-	if l.geositeMap != nil {
-		return l.geositeMap, nil
-	}
-	filename := l.GeoSiteFilename
-	if filename == "" {
-		filename = geositeFilename
-	}
-	if l.AutoDL {
-		if !l.shouldDownload(filename) {
-			m, err := v2geo.LoadGeoSite(filename)
-			if err == nil {
-				l.geositeMap = m
-				return m, nil
-			}
-			// file is broken, download it again
-		}
-		err := l.downloadAndCheck(filename, geositeURL, func(filename string) error {
-			_, err := v2geo.LoadGeoSite(filename)
-			return err
-		})
-		if err != nil {
-			// as long as the previous download exists, fallback to it
-			if _, serr := os.Stat(filename); os.IsNotExist(serr) {
-				return nil, err
-			}
-		}
-	}
-	m, err := v2geo.LoadGeoSite(filename)
-	if err != nil {
-		return nil, err
-	}
-	l.geositeMap = m
-	return m, nil
-}
-
 func (l *GeoLoaderT) LoadGeoSiteSSKV() (map[string]*v2geo.Set, error) {
+	l.lock.Lock()
+	defer l.lock.Unlock()
 	if l.geositeSSKVMap != nil {
 		return l.geositeSSKVMap, nil
 	}
 	filename := l.GeoSiteFilename
 	if filename == "" {
 		filename = geositeFilename
+	}
+	downUrl := l.GeositeURL
+	if downUrl == "" {
+		downUrl = geositeURL
 	}
 	if l.AutoDL {
 		if !l.shouldDownload(filename) {
@@ -192,7 +128,7 @@ func (l *GeoLoaderT) LoadGeoSiteSSKV() (map[string]*v2geo.Set, error) {
 			}
 			// file is broken, download it again
 		}
-		err := l.downloadAndCheck(filename, geositeURL, func(filename string) error {
+		err := l.downloadAndCheck(filename, downUrl, func(filename string) error {
 			_, err := v2geo.LoadGeoSite(filename)
 			return err
 		})
@@ -212,12 +148,18 @@ func (l *GeoLoaderT) LoadGeoSiteSSKV() (map[string]*v2geo.Set, error) {
 }
 
 func (l *GeoLoaderT) LoadGeoMMDB() (*IPReader, error) {
+	l.lock.Lock()
+	defer l.lock.Unlock()
 	if l.ipreader != nil {
 		return l.ipreader, nil
 	}
 	filename := l.MMDBFilename
 	if filename == "" {
 		filename = mmdbFilename
+	}
+	downUrl := l.MmdbURL
+	if downUrl == "" {
+		downUrl = mmdbURL
 	}
 	if l.AutoDL {
 		if !l.shouldDownload(filename) {
@@ -228,7 +170,7 @@ func (l *GeoLoaderT) LoadGeoMMDB() (*IPReader, error) {
 			}
 			// file is broken, download it again
 		}
-		err := l.downloadAndCheck(filename, mmdbURL, func(filename string) error {
+		err := l.downloadAndCheck(filename, downUrl, func(filename string) error {
 			return nil
 		})
 		if err != nil {
@@ -255,6 +197,8 @@ func NewIPInstance(mmdbPath string) (*IPReader, error) {
 }
 
 func (l *GeoLoaderT) CloseMMdb() {
+	l.lock.Lock()
+	defer l.lock.Unlock()
 	if l.ipreader != nil {
 		l.ipreader.lock.Lock()
 		defer l.ipreader.lock.Unlock()
